@@ -13,8 +13,6 @@ ad_video = glob.glob(os.path.join(pl_input_folder, '*.mp4'))[0]
 # Sort the gaze data by filtering the start and end timestamps
 gaze_data = pd.read_csv(os.path.join(pl_input_folder,'updated_gaze_data.csv'))
 
-# one approach is to use MGM, create a df of gaze timestamps, based on frame timestamp
-
 # Calculate the frame duration based on average_rate
 input_container = av.open(ad_video)
 input_stream = input_container.streams.video[0]
@@ -31,13 +29,9 @@ gaze_preprocessed = []
 
 # Iterate over frames in the input video
 for frame_idx, frame in enumerate(input_container.decode(video=0)):
-    # Convert the PyAV frame to a PIL image for drawing and to RGB explicitly (to avoid the warning)
-    img = frame.to_image().convert("RGB")
 
     # Calculate the timestamp for the current frame
     current_frame_timestamp = video_start_timestamp + frame_idx * frame_duration_ns
-
-    # Draw AOI for the current frame if available
 
     for i in range(2):
         timestamp = current_frame_timestamp + i * frame_duration_ns//2
@@ -46,8 +40,8 @@ for frame_idx, frame in enumerate(input_container.decode(video=0)):
         normalized_timestamp = timestamp - video_start_timestamp
 
         # Find gaze points for the current frame and calculate the average
-        gaze_points = gaze_data[(gaze_data['timestamp [ns]'] >= current_frame_timestamp) &
-                                (gaze_data['timestamp [ns]'] < current_frame_timestamp + frame_duration_ns)]
+        gaze_points = gaze_data[(gaze_data['timestamp [ns]'] >= timestamp) &
+                                (gaze_data['timestamp [ns]'] < timestamp + frame_duration_ns//2)]
 
         if not gaze_points.empty:
             # Average the gaze points for this frame
