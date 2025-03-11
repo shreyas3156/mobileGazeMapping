@@ -43,6 +43,7 @@ import argparse
 import numpy as np
 import pandas as pd
 import cv2
+from ultralytics import YOLO
 
 OPENCV3 = (cv2.__version__.split('.')[0] == '3')
 print("OPENCV version " + cv2.__version__)
@@ -277,21 +278,18 @@ def processRecording(gazeData=None, worldCameraVid=None, screenVid=None, outputD
     # Load the videos, get parameters
     vid1 = cv2.VideoCapture(worldCameraVid)
     vid2 = cv2.VideoCapture(screenVid)
-    if OPENCV3:
-        vid_size1 = (int(vid1.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                   int(vid1.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        vid_size2 = (int(vid2.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                   int(vid2.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    vid_size1 = (int(vid1.get(cv2.CAP_PROP_FRAME_WIDTH)),
+               int(vid1.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+    vid_size2 = (int(vid2.get(cv2.CAP_PROP_FRAME_WIDTH)),
+               int(vid2.get(cv2.CAP_PROP_FRAME_HEIGHT)))
 
-        vid_codec = cv2.VideoWriter_fourcc(*'mp4v')
-        feature_detect = cv2.SIFT_create()
+    vid_codec = cv2.VideoWriter_fourcc(*'mp4v')
+    feature_detect = cv2.SIFT_create()
 
     # don't need to extract timestamps for WorldCameraVid since we already have them in the gaze data.
     _, fps1 = extract_timestamps(worldCameraVid)
     timestamps_screen, fps2 = extract_timestamps(screenVid)
-
     timestamps_world = gazeWorld_df['timestamp']
-    # 196 in t1, 222 in t2
 
     # align the timestamps of vid2 with vid1
     # find the timestamps of frames
@@ -299,12 +297,9 @@ def processRecording(gazeData=None, worldCameraVid=None, screenVid=None, outputD
     aligned_frames_idx_screen = [np.argmin(np.abs(timestamps_screen - t)) for t in timestamps_world]
     # aligned_timestamps_screen = [timestamps_screen[np.argmin(np.abs(timestamps_screen - t))] for t in timestamps_world]
 
-    # print(vid1.get(cv2.CAP_PROP_FRAME_COUNT), vid2.get(cv2.CAP_PROP_FRAME_COUNT))
-
-     # Screen recording mapping output video
-    vidOut_ref_fname = join(outputDir, 'screen_gaze.mp4')
+    # Screen recording mapping output video
+    vidOut_ref_fname = join(outputDir, 'screen_gaze-5.mp4')
     vidOut_ref = cv2.VideoWriter()
-    print(vid_size2)
     vidOut_ref.open(vidOut_ref_fname,
                     vid_codec,
                     fps2,
@@ -334,8 +329,8 @@ def processRecording(gazeData=None, worldCameraVid=None, screenVid=None, outputD
         ret1, frame1 = vid1.read()
         ret2, frame2 = vid2.read()
 
-        # #### Sanity check
-        # if frame_world_idx < 8:
+        #### Sanity check
+        # if frame_world_idx < 134:
         #     continue
         # if all([ret1, ret2, frame1 is not None, frame2 is not None]):
         #     cv2.imshow("Extracted Frame 1", frame1)
@@ -345,8 +340,6 @@ def processRecording(gazeData=None, worldCameraVid=None, screenVid=None, outputD
         # break
 
         # check if it's a valid frame
-        # if (ret is True) and (frameCounter in framesToUse):
-
         if all([ret1, ret2, frame1 is not None, frame2 is not None]):
 
             # make copy of the reference image for later use
@@ -403,13 +396,6 @@ def processRecording(gazeData=None, worldCameraVid=None, screenVid=None, outputD
                         dotColor = [168, 231, 86]            # minty green
                         dotSize = 8
 
-                    # world frame
-                    cv2.circle(frame1,
-                               (int(world_gazeX), int(world_gazeY)),
-                               dotSize,
-                               dotColor,
-                               -1)
-
                     # screen frame
                     cv2.circle(frame2,
                                (int(screen_gazeX), int(screen_gazeY)),
@@ -420,19 +406,44 @@ def processRecording(gazeData=None, worldCameraVid=None, screenVid=None, outputD
                 # if not a good match, use the original frame for the screen2world
                 screen2world_frame = processedFrame['origFrame1']
 
+            mps_device = "mps"  # Apple ARM64
+            # Load pre-trained YOLOv8 model (default COCO model)
+            model = YOLO("best-8m-15-10.pt")  # 'n' = nano model, can also use yolov8s.pt, yolov8m.pt, etc.
+            model.to(mps_device)
+
+            # Run object detection
+            results = model.track(frame2, device=mps_device)
+
+            for r in results:
+                class_names = r.names
+                # iterate over each box
+                for box in r.boxes:
+                    # check if confidence is greater than 40 percent
+                    if box.conf[0] > 0.5:
+                        # get coordinates
+                        [x1, y1, x2, y2] = box.xyxy[0]
+                        # convert to int
+                        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+                        # get the class
+                        cls = int(box.cls[0])
+
+                        # get the class name
+                        class_name = class_names[cls]
+
+                        color = (0, 255, 0) if class_name == 'video' else (255, 0, 0)
+
+                        # draw the rectangle
+                        cv2.rectangle(frame2, (x1, y1), (x2, y2), color, 2)
+
+                        # # put the class name and confidence on the image
+                        # cv2.putText(frame2, f'{class_names[int(box.cls[0])]} {box.conf[0]:.2f}', (x1, y1),
+                        #             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
             # write outputs to video
             # vidOut_world.write(frame1)
             vidOut_ref.write(frame2)
             # vidOut_ref2world.write(screen2world_frame)
-
-        # increment frame counter
-        # frameCounter += 1
-        # if frameCounter > np.max(framesToUse):
-        #     # release all videos
-        #     vid1.release()
-        #     vidOut_world.release()
-        #     vidOut_ref.release()
-        #     vidOut_ref2world.release()
 
         # write out gaze data
         try:
@@ -520,7 +531,6 @@ def processFrame(frame1, frame2, frameIdx, feature_detect):
                 sufficientMatches = False
 
         except:
-            print("here===============")
             print('no matches found on frame {}'.format(frameIdx))
             sufficientMatches = False
             pass
@@ -575,11 +585,12 @@ if __name__ == '__main__':
     # else:
     #     outputDir = args.outputDir
 
-    inputDataDir = 'preprocessing/pl_input'
-    gazeData = join(inputDataDir, 'gaze_preprocessed.csv')
-    worldCameraVid = join(inputDataDir, '2.mp4')
-    screenVid = join(inputDataDir, 'ad-2-screenrec.mp4')
-    outputDir = join(inputDataDir, 'test_output')
+    preprocessDir = 'preprocessing'
+    inputDir = 'pl_input'
+    gazeData = join(preprocessDir, 'pl_preprocessed_out', 'gaze_preprocessed_yt.csv')
+    worldCameraVid = join(preprocessDir, inputDir, '5.mp4')
+    screenVid = join(preprocessDir, inputDir, 'ad-5-screenrec-yt.mp4')
+    outputDir = join(preprocessDir, inputDir, 'test_output')
 
     ## process the recording
     print('processing the recording...')
